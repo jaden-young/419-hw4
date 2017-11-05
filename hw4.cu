@@ -1,6 +1,4 @@
 #include <stdio.h>
-
-#include <stdio.h>
 #include <stdlib.h>
 #include <fstream>
 #include <iostream>
@@ -8,12 +6,13 @@
 // For the CUDA runtime routines (prefixed with "cuda_")
 #include <cuda_runtime.h>
 
-#define threads_per_block 512
+#define threads_per_block 256
 
 using namespace std;
 
-__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_clustering_coefficients)
+__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_sum)
 {
+     __shared__ float temp[threads_per_block];
      const uint u_id = blockDim.x * blockIdx.x + threadIdx.x;
      const uint u_index = u_id * num_nodes;
      float n_u = 0.0f; //number of vertices in the neighborhood of vertex u
@@ -39,25 +38,25 @@ __global__ void clustering_coefficient(const float* adj_matrix, const uint num_n
           }
           float numerator = 2.0f * m_u;
           float denominator = n_u * (n_u - 1.0f);
-          d_clustering_coefficients[u_id] = numerator / denominator;
+          temp[threadIdx.x] = numerator / denominator;
      }
-     /* temp[threadIdx.x] = numerator / denominator; */
 
-     /* __syncthreads(); */
+     __syncthreads();
 
-     /* if (threadIdx.x == 0) */
-     /* { */
-     /*      float sum = 0.0f; */
-     /*      for (uint i = 0; i < threads_per_block; i++) */
-     /*      { */
-     /*           uint index = u_row_start + i; */
-     /*           if (index < size) */
-     /*           { */
-     /*                sum += temp[i]; */
-     /*           } */
-     /*      } */
-     /*      d_clustering_coefficients[u_row_start] = sum; */
-     /* } */
+     if (threadIdx.x == 0)
+     {
+          float sum = 0.0f;
+          for (uint i = 0; i < threads_per_block; i++)
+          {
+               uint current_index = u_index + i;
+               if ( current_index < num_nodes)
+               {
+                    sum += temp[i];
+               }
+          }
+          atomicAdd(d_sum, sum);
+
+     }
 }
 
 uint NUM_NODES;
@@ -162,46 +161,33 @@ int main(int argc, char* argv[]){
          blocks = max_blocks;
     }
 
-    float *d_clustering_coefficients = NULL;
-    err = cudaMalloc((void **)&d_clustering_coefficients, sizeof(float) * num_nodes);
+    float* d_sum = NULL;
+    err = cudaMalloc((void **)&d_sum, sizeof(float));
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to allocate for a global variable (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
-    cudaMemset(d_clustering_coefficients, 0, sizeof(float) * num_nodes);
+    cudaMemset(d_sum, 0, sizeof(float));
 
-    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_clustering_coefficients);
+    printf("CUDA kernel launch with %d blocks of %d threads\n", blocks, threads_per_block);
+    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_sum);
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to launch vectorDot kernel (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
 
-    // // Launch the Vector Dot CUDA Kernel
-    // int blocksPerGrid =(numElements + threadsPerBlock - 1) / threadsPerBlock;
-    printf("CUDA kernel launch with %d blocks of %d threads\n", blocks, threads_per_block);
-
-
-    float h_clustering_coefficients[num_nodes];
-    // Copy the device result in device memory to the host result
+    float h_sum;
     printf("Copy the CUDA device to the host memory\n");
-    err = cudaMemcpy(h_clustering_coefficients, d_clustering_coefficients, sizeof(float) * num_nodes, cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
 
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Failed to copy vector C from device to host (error code %s)!\n", cudaGetErrorString(err));
         exit(EXIT_FAILURE);
     }
-    float h_sum = 0.0f;
-    for (uint i = 0; i < num_nodes; i++)
-    {
-         h_sum += h_clustering_coefficients[i];
-    }
     float C_G = h_sum / num_nodes;
-
-    /* float diff = fabs(h_Sum-totalSumHost); */
-    /* printf("RESULTS: Device AtomicAdd: %f Host: %f  Diff: %f \n",h_Sum, totalSumHost,diff); */
 
     // Free device global memory
     err = cudaFree(d_adj_matrix);
@@ -212,7 +198,7 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
-    err = cudaFree(d_clustering_coefficients);
+    err = cudaFree(d_sum);
 
     if (err != cudaSuccess)
     {

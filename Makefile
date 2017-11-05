@@ -153,9 +153,9 @@ SAMPLE_ENABLED := 1
 
 # Gencode arguments
 ifeq ($(OS_ARCH),armv7l)
-SMS ?= 20 30 32 35 37 50
+SMS ?= 30 32 35 37 50
 else
-SMS ?= 11 20 30 35 37 50
+SMS ?= 20 30 35 37 50
 endif
 
 ifeq ($(SMS),)
