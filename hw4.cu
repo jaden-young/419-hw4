@@ -6,57 +6,64 @@
 // For the CUDA runtime routines (prefixed with "cuda_")
 #include <cuda_runtime.h>
 
-#define threads_per_block 256
+#define threads_per_block 128
+#define index(i, j) (i * num_nodes + j)
 
 using namespace std;
 
-__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_sum)
+__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_vec)
 {
-     __shared__ float temp[threads_per_block];
-     const uint u_id = blockDim.x * blockIdx.x + threadIdx.x;
-     const uint u_index = u_id * num_nodes;
+     const uint u = blockDim.x * blockIdx.x + threadIdx.x;
+
+     /* __shared__ float temp[threads_per_block]; */
      float n_u = 0.0f; //number of vertices in the neighborhood of vertex u
      float m_u = 0.0f; //number of edges in the neighborhood of vertex u
-     if (u_id < num_nodes)
+
+     if (u >= num_nodes)
      {
-          for (uint v_id = 0; v_id < num_nodes; v_id++)
+          return;
+     }
+
+     for (uint v = 0; v < num_nodes; v++)
+     {
+          if (adj_matrix[index(u,v)] == 1.0f)
           {
-               const uint v_index = u_index + v_id;
-               if (adj_matrix[v_index] == 1.0f)
+               n_u++;
+               for (uint w = v + 1; w < num_nodes; w++)
                {
-                    n_u++;
-                    for (uint w_id = v_id + 1; w_id < num_nodes; w_id++)
+                    if (adj_matrix[index(u,w)] == 1.0f &&
+                        adj_matrix[index(v,w)] == 1.0f)
                     {
-                         const uint w_index = u_index + w_id;
-                         if (adj_matrix[w_index] == 1.0f &&
-                             adj_matrix[v_id * num_nodes + w_id] == 1.0f)
-                         {
-                              m_u++;
-                         }
+                         m_u++;
                     }
                }
           }
-          float numerator = 2.0f * m_u;
-          float denominator = n_u * (n_u - 1.0f);
-          temp[threadIdx.x] = numerator / denominator;
      }
+     /*
+          C(u) = # edges in N_u         m_u           2 * m_u
+                 --------------     = --------  =   ------------
+                max # edges in N_u     /n_u\       n_u * (n_u - 1)
+                                       \ 2 /
+          */
+     /* temp[threadIdx.x] = (2.0f * m_u) / (n_u * (n_u - 1.0f)); */
+     d_vec[u] = (2.0f * m_u) / (n_u * (n_u - 1.0f));
+     
+     /* __syncthreads(); */
 
-     __syncthreads();
+     /* if (threadIdx.x == 0) */
+     /* { */
+     /*      float sum = 0.0f; */
+     /*      const uint size = num_nodes * num_nodes; */
+     /*      for (uint i = 0; i < threads_per_block; i++) */
+     /*      { */
+     /*           if ( index(u,i) < size) */
+     /*           { */
+     /*                sum += temp[i]; */
+     /*           } */
+     /*      } */
+     /*      atomicAdd(d_sum, sum); */
 
-     if (threadIdx.x == 0)
-     {
-          float sum = 0.0f;
-          for (uint i = 0; i < threads_per_block; i++)
-          {
-               uint current_index = u_index + i;
-               if ( current_index < num_nodes)
-               {
-                    sum += temp[i];
-               }
-          }
-          atomicAdd(d_sum, sum);
-
-     }
+     /* } */
 }
 
 uint NUM_NODES;
@@ -153,7 +160,7 @@ int main(int argc, char* argv[]){
     cudaGetDeviceProperties(&prop, 0);
 
     uint max_blocks = prop.maxGridSize[0];
-    uint blocks = (num_nodes + threads_per_block - 1) / threads_per_block;
+    uint blocks = ceil((num_nodes + threads_per_block - 1) / threads_per_block);
 
     // hardware limit
     if (blocks > max_blocks)
@@ -161,33 +168,43 @@ int main(int argc, char* argv[]){
          blocks = max_blocks;
     }
 
-    float* d_sum = NULL;
-    err = cudaMalloc((void **)&d_sum, sizeof(float));
+    float* d_vec = NULL;
+    err = cudaMalloc((void**)&d_vec, num_nodes * sizeof(float));
+    /* float* d_sum = NULL; */
+    /* err = cudaMalloc((void **)&d_sum, sizeof(float)); */
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to allocate for a global variable (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
-    cudaMemset(d_sum, 0, sizeof(float));
+    cudaMemset(d_vec, 0, num_nodes * sizeof(float));
 
     printf("CUDA kernel launch with %d blocks of %d threads\n", blocks, threads_per_block);
-    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_sum);
+    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_vec);
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to launch vectorDot kernel (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
 
+    float h_vec[num_nodes];
     float h_sum;
     printf("Copy the CUDA device to the host memory\n");
-    err = cudaMemcpy(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(&h_vec, d_vec, sizeof(float) * num_nodes, cudaMemcpyDeviceToHost);
 
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Failed to copy vector C from device to host (error code %s)!\n", cudaGetErrorString(err));
         exit(EXIT_FAILURE);
     }
+    cout << "no err" << endl;
+    for (uint i = 0; i < num_nodes; i++)
+    {
+         h_sum += h_vec[i];
+    }
+    cout << "no err" << endl;
     float C_G = h_sum / num_nodes;
+    cout << "no err" << endl;
 
     // Free device global memory
     err = cudaFree(d_adj_matrix);
@@ -198,7 +215,12 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
-    err = cudaFree(d_sum);
+    for (uint i = 0; i < num_nodes; i++)
+    {
+         cout << i << ": " << h_vec[i] << endl;
+    }
+
+    err = cudaFree(d_vec);
 
     if (err != cudaSuccess)
     {
