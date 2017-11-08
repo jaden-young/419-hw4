@@ -1,3 +1,0 @@
-#+TITLE: Clustering Coefficients GPU
-#+AUTHOR: Jaden Young
-#+EMAIL: jaden.young@ndsu.edu
