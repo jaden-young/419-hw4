@@ -208,3 +208,7 @@ clean:
 #	rm -rf ../../bin/$(OS_ARCH)/$(OSLOWER)/$(TARGET)$(if $(abi),/$(abi))/hw4
 
 clobber: clean
+
+dist:
+	mkdir dist && \
+	tar --exclude='dist' --exclude='data' -zcvf dist/jadyoungAssig4.tgz *
