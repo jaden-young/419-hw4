@@ -117,6 +117,12 @@ float* read_graph(char filename[])
  * Host main routine
  */
 int main(int argc, char* argv[]){
+     if (argc < 2)
+     {
+          cout << "Usage:" << endl
+               << "./hw4 filename" << endl;
+          exit(-1);
+     }
     // Error code to check return values for CUDA calls
     cudaError_t err = cudaSuccess;
 
@@ -143,7 +149,6 @@ int main(int argc, char* argv[]){
 
     // Copy the host input vectors A and B in host memory to the device input vectors in
     // device memory
-    printf("Copy input data from the host memory to the CUDA device\n");
     err = cudaMemcpy(d_adj_matrix, h_adj_matrix, size, cudaMemcpyHostToDevice);
 
     if (err != cudaSuccess)
@@ -173,7 +178,6 @@ int main(int argc, char* argv[]){
     }
     cudaMemset(d_sum, 0, num_nodes * sizeof(float));
 
-    printf("CUDA kernel launch with %d blocks of %d threads\n", blocks, threads_per_block);
     clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_sum);
     if (err != cudaSuccess)
     {
@@ -182,12 +186,11 @@ int main(int argc, char* argv[]){
     }
 
     float h_sum;
-    printf("Copy the CUDA device to the host memory\n");
     err = cudaMemcpy(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
 
     if (err != cudaSuccess)
     {
-        fprintf(stderr, "Failed to copy vector C from device to host (error code %s)!\n", cudaGetErrorString(err));
+        fprintf(stderr, "Failed to copy sum from device to host (error code %s)!\n", cudaGetErrorString(err));
         exit(EXIT_FAILURE);
     }
 
@@ -226,7 +229,6 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
-    printf("Done\n");
     return 0;
 }
 
