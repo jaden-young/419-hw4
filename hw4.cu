@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-// For the CUDA runtime routines (prefixed with "cuda_")
 #include <cuda_runtime.h>
 
 #define threads_per_block 128
@@ -11,11 +10,11 @@
 
 using namespace std;
 
-__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_vec)
+__global__ void clustering_coefficient(const float* adj_matrix, const uint num_nodes, float* d_sum)
 {
      const uint u = blockDim.x * blockIdx.x + threadIdx.x;
 
-     /* __shared__ float temp[threads_per_block]; */
+     __shared__ float temp[threads_per_block];
      float n_u = 0.0f; //number of vertices in the neighborhood of vertex u
      float m_u = 0.0f; //number of edges in the neighborhood of vertex u
 
@@ -45,25 +44,22 @@ __global__ void clustering_coefficient(const float* adj_matrix, const uint num_n
                 max # edges in N_u     /n_u\       n_u * (n_u - 1)
                                        \ 2 /
           */
-     /* temp[threadIdx.x] = (2.0f * m_u) / (n_u * (n_u - 1.0f)); */
-     d_vec[u] = (2.0f * m_u) / (n_u * (n_u - 1.0f));
-     
-     /* __syncthreads(); */
+     temp[threadIdx.x] = (2.0f * m_u) / (n_u * (n_u - 1.0f));
 
-     /* if (threadIdx.x == 0) */
-     /* { */
-     /*      float sum = 0.0f; */
-     /*      const uint size = num_nodes * num_nodes; */
-     /*      for (uint i = 0; i < threads_per_block; i++) */
-     /*      { */
-     /*           if ( index(u,i) < size) */
-     /*           { */
-     /*                sum += temp[i]; */
-     /*           } */
-     /*      } */
-     /*      atomicAdd(d_sum, sum); */
+     __syncthreads();
 
-     /* } */
+     if (threadIdx.x == 0)
+     {
+          float sum = 0.0f;
+          for (uint i = 0; i < threads_per_block; i++)
+          {
+               if (u + i < num_nodes)
+               {
+                    sum += temp[i];
+               }
+          }
+          atomicAdd(d_sum, sum);
+     }
 }
 
 uint NUM_NODES;
@@ -168,43 +164,34 @@ int main(int argc, char* argv[]){
          blocks = max_blocks;
     }
 
-    float* d_vec = NULL;
-    err = cudaMalloc((void**)&d_vec, num_nodes * sizeof(float));
-    /* float* d_sum = NULL; */
-    /* err = cudaMalloc((void **)&d_sum, sizeof(float)); */
+    float* d_sum = NULL;
+    err = cudaMalloc((void **)&d_sum, sizeof(float));
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to allocate for a global variable (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
-    cudaMemset(d_vec, 0, num_nodes * sizeof(float));
+    cudaMemset(d_sum, 0, num_nodes * sizeof(float));
 
     printf("CUDA kernel launch with %d blocks of %d threads\n", blocks, threads_per_block);
-    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_vec);
+    clustering_coefficient<<<blocks, threads_per_block>>>(d_adj_matrix, num_nodes, d_sum);
     if (err != cudaSuccess)
     {
          fprintf(stderr, "Failed to launch vectorDot kernel (error code %s)!\n", cudaGetErrorString(err));
          exit(EXIT_FAILURE);
     }
 
-    float h_vec[num_nodes];
     float h_sum;
     printf("Copy the CUDA device to the host memory\n");
-    err = cudaMemcpy(&h_vec, d_vec, sizeof(float) * num_nodes, cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
 
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Failed to copy vector C from device to host (error code %s)!\n", cudaGetErrorString(err));
         exit(EXIT_FAILURE);
     }
-    cout << "no err" << endl;
-    for (uint i = 0; i < num_nodes; i++)
-    {
-         h_sum += h_vec[i];
-    }
-    cout << "no err" << endl;
+
     float C_G = h_sum / num_nodes;
-    cout << "no err" << endl;
 
     // Free device global memory
     err = cudaFree(d_adj_matrix);
@@ -215,12 +202,7 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
-    for (uint i = 0; i < num_nodes; i++)
-    {
-         cout << i << ": " << h_vec[i] << endl;
-    }
-
-    err = cudaFree(d_vec);
+    err = cudaFree(d_sum);
 
     if (err != cudaSuccess)
     {
