@@ -1,0 +1,6 @@
+#!/bin/sh
+for f in $@
+do
+    [ -f $f ] && echo "$f: $(./hw4 $f)"
+done
+exit
